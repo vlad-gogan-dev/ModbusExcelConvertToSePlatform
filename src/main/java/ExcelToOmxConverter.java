@@ -14,7 +14,6 @@ public class ExcelToOmxConverter extends JFrame {
     private JTextField outputDirField;
     private JLabel statusLabel;
 
-    // Поля фильтров
     private JTextField filterAIField;
     private JTextField filterAOField;
     private JTextField filterDIField;
@@ -29,7 +28,6 @@ public class ExcelToOmxConverter extends JFrame {
         setSize(820, 350);
         setLayout(new BorderLayout(10, 10));
 
-        // Верх: выбор файлов
         JPanel filePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton chooseFilesButton = new JButton("Выбрать Excel файлы");
         filesField = new JTextField(40);
@@ -38,11 +36,9 @@ public class ExcelToOmxConverter extends JFrame {
         filePanel.add(filesField);
         add(filePanel, BorderLayout.NORTH);
 
-        // Центральная часть: папка + фильтры
         JPanel centerPanel = new JPanel();
         centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
 
-        // Панель выбора папки
         JPanel dirPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton chooseDirButton = new JButton("Выбрать папку для сохранения");
         outputDirField = new JTextField(40);
@@ -51,7 +47,6 @@ public class ExcelToOmxConverter extends JFrame {
         dirPanel.add(outputDirField);
         centerPanel.add(dirPanel);
 
-        // Панель фильтров (4 поля)
         JPanel filterPanel = new JPanel(new GridLayout(2, 4, 5, 5));
         filterPanel.setBorder(BorderFactory.createTitledBorder("Генерация по соответствию (фильтры)"));
         filterPanel.add(new JLabel("Фильтр AI:", SwingConstants.CENTER));
@@ -72,7 +67,6 @@ public class ExcelToOmxConverter extends JFrame {
 
         add(centerPanel, BorderLayout.CENTER);
 
-        // Низ: кнопка генерации и статус
         JPanel bottomPanel = new JPanel(new BorderLayout());
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         JButton generateButton = new JButton("Создать XML");
@@ -82,7 +76,6 @@ public class ExcelToOmxConverter extends JFrame {
         bottomPanel.add(statusLabel, BorderLayout.SOUTH);
         add(bottomPanel, BorderLayout.SOUTH);
 
-        // Обработчики
         chooseFilesButton.addActionListener(this::chooseFiles);
         chooseDirButton.addActionListener(this::chooseOutputDir);
         generateButton.addActionListener(this::generateXml);
@@ -177,8 +170,11 @@ public class ExcelToOmxConverter extends JFrame {
         List<String> doTags = new ArrayList<>();
         List<String> doDesc = new ArrayList<>();
 
+        String sheetName = ""; // имя листа Excel
+
         try (Workbook workbook = WorkbookFactory.create(new FileInputStream(excelFile))) {
             Sheet sheet = workbook.getSheetAt(0);
+            sheetName = sheet.getSheetName(); // запоминаем имя первого листа
             for (Row row : sheet) {
                 Cell cellA = row.getCell(0);
                 Cell cellB = row.getCell(1);
@@ -214,10 +210,17 @@ public class ExcelToOmxConverter extends JFrame {
             }
         }
 
+        // Генерация стандартных _ST файлов
         generateTypeFile(baseOutputDir, baseName, "AI", aiTags, aiDesc, "float32");
         generateTypeFile(baseOutputDir, baseName, "AO", aoTags, aoDesc, "float32");
         generateTypeFile(baseOutputDir, baseName, "DI", diTags, diDesc, "bool");
         generateTypeFile(baseOutputDir, baseName, "DO", doTags, doDesc, "bool");
+
+        // Генерация новых Types-файлов
+        generateTypesFile(baseOutputDir, baseName, sheetName, "AI", aiTags, aiDesc, "float32");
+        generateTypesFile(baseOutputDir, baseName, sheetName, "AO", aoTags, aoDesc, "float32");
+        generateTypesFile(baseOutputDir, baseName, sheetName, "DI", diTags, diDesc, "bool");
+        generateTypesFile(baseOutputDir, baseName, sheetName, "DO", doTags, doDesc, "bool");
     }
 
     private boolean matchesFilter(String tag, String filter) {
@@ -229,34 +232,134 @@ public class ExcelToOmxConverter extends JFrame {
                                   List<String> tags, List<String> descriptions,
                                   String dataType) throws IOException {
         if (tags.isEmpty()) return;
-
         File targetDir = new File(baseDir, "imports/Server/" + baseName + "/" + type);
         Files.createDirectories(targetDir.toPath());
-
         String xmlContent = buildOmxXml(tags, descriptions, dataType);
         String outputFileName = baseName + "_" + type + "_ST.omx-export";
         File outputFile = new File(targetDir, outputFileName);
         Files.writeString(outputFile.toPath(), xmlContent);
     }
 
+    /**
+     * Генерирует Types-файл с namespace и типами PLC/Serv.
+     */
+    private void generateTypesFile(File baseDir, String baseName, String sheetName, String type,
+                                   List<String> tags, List<String> descriptions,
+                                   String dataType) throws IOException {
+        if (tags.isEmpty()) return;
+
+        File typesDir = new File(baseDir, "imports/Server/" + baseName + "/" + type + "/Types");
+        Files.createDirectories(typesDir.toPath());
+
+        // Транслитерация имени файла для namespace
+        String translitBase = transliterate(baseName);
+        String translitWithUnderscore = translitBase.replace('.', '_');
+        String namespaceName = type + "." + translitBase + "." + translitWithUnderscore;
+
+        StringBuilder xml = new StringBuilder();
+        xml.append("<omx xmlns=\"system\" migration=\"41\" xmlns:ct=\"automation.control\" xmlns:r=\"automation.reference\">\n");
+        xml.append("  <namespace name=\"").append(namespaceName).append("\" uuid=\"\">\n");
+
+        // socket-type ST с параметрами
+        xml.append("    <ct:socket-type name=\"ST\" access-level=\"public\" uuid=\"\">\n");
+        for (int i = 0; i < tags.size(); i++) {
+            xml.append("      <ct:socket-parameter name=\"").append(escapeXml(tags.get(i)))
+                    .append("\" type=\"").append(dataType).append("\" uuid=\"\">\n");
+            xml.append("        <attribute type=\"unit.System.Attributes.Description\" value=\"")
+                    .append(escapeXml(descriptions.get(i))).append("\" />\n");
+            xml.append("      </ct:socket-parameter>\n");
+        }
+        xml.append("    </ct:socket-type>\n");
+
+        String plcTypeName = type + "_PLC";
+        String servTypeName = type + "_Serv";
+
+        // Тип PLC
+        xml.append("    <ct:type name=\"").append(plcTypeName)
+                .append("\" abstract=\"false\" aspect=\"Aspects.PLC\" access-level=\"public\" uuid=\"\">\n");
+        xml.append("      <ct:socket name=\"ST\" access-level=\"public\" access-scope=\"global\" direction=\"out\" type=\"")
+                .append(translitWithUnderscore).append(".ST\" uuid=\"\" />\n");
+        xml.append("    </ct:type>\n");
+
+        // Тип Serv
+        xml.append("    <ct:type name=\"").append(servTypeName)
+                .append("\" abstract=\"false\" aspect=\"Aspects.IOS\" original=\"")
+                .append(plcTypeName).append("\" access-level=\"public\" uuid=\"\">\n");
+        xml.append("      <ct:socket-bind source=\"_").append(plcTypeName).append(".ST\" target=\"ST\" />\n");
+        xml.append("      <r:ref name=\"_").append(plcTypeName).append("\" type=\"")
+                .append(plcTypeName).append("\" const-access=\"false\" aspected=\"true\" uuid=\"\" />\n");
+        xml.append("      <ct:socket name=\"ST\" access-level=\"public\" access-scope=\"global\" direction=\"out\" type=\"")
+                .append(translitWithUnderscore).append(".ST\" uuid=\"\" />\n");
+        xml.append("    </ct:type>\n");
+
+        xml.append("  </namespace>\n");
+        xml.append("</omx>\n");
+
+        String outputFileName = sheetName + ".omx-export";
+        File outputFile = new File(typesDir, outputFileName);
+        Files.writeString(outputFile.toPath(), xml.toString());
+    }
+
     private String buildOmxXml(List<String> tags, List<String> descriptions, String dataType) {
         StringBuilder sb = new StringBuilder();
         sb.append("<omx xmlns=\"system\" migration=\"41\" xmlns:ct=\"automation.control\">\n");
         sb.append("  <ct:socket-type name=\"ST\" access-level=\"public\" uuid=\"\">\n");
-
         for (int i = 0; i < tags.size(); i++) {
-            sb.append("    <ct:socket-parameter name=\"")
-                    .append(escapeXml(tags.get(i)))
+            sb.append("    <ct:socket-parameter name=\"").append(escapeXml(tags.get(i)))
                     .append("\" type=\"").append(dataType).append("\" uuid=\"\">\n");
             sb.append("      <attribute type=\"unit.System.Attributes.Description\" value=\"")
-                    .append(escapeXml(descriptions.get(i)))
-                    .append("\" />\n");
+                    .append(escapeXml(descriptions.get(i))).append("\" />\n");
             sb.append("    </ct:socket-parameter>\n");
         }
-
         sb.append("  </ct:socket-type>\n");
         sb.append("</omx>\n");
         return sb.toString();
+    }
+
+    /**
+     * Простая транслитерация русских букв для формирования валидных имён namespace.
+     */
+    private String transliterate(String cyrillic) {
+        String[][] map = {
+                {"Щ", "SH"}, {"щ", "sh"},
+                {"А", "A"}, {"а", "a"},
+                {"Б", "B"}, {"б", "b"},
+                {"В", "V"}, {"в", "v"},
+                {"Г", "G"}, {"г", "g"},
+                {"Д", "D"}, {"д", "d"},
+                {"Е", "E"}, {"е", "e"},
+                {"Ё", "Yo"}, {"ё", "yo"},
+                {"Ж", "Zh"}, {"ж", "zh"},
+                {"З", "Z"}, {"з", "z"},
+                {"И", "I"}, {"и", "i"},
+                {"Й", "Y"}, {"й", "y"},
+                {"К", "K"}, {"к", "k"},
+                {"Л", "L"}, {"л", "l"},
+                {"М", "M"}, {"м", "m"},
+                {"Н", "N"}, {"н", "n"},
+                {"О", "O"}, {"о", "o"},
+                {"П", "P"}, {"п", "p"},
+                {"Р", "R"}, {"р", "r"},
+                {"С", "S"}, {"с", "s"},
+                {"Т", "T"}, {"т", "t"},
+                {"У", "U"}, {"у", "u"},
+                {"Ф", "F"}, {"ф", "f"},
+                {"Х", "Kh"}, {"х", "kh"},
+                {"Ц", "Ts"}, {"ц", "ts"},
+                {"Ч", "Ch"}, {"ч", "ch"},
+                {"Ш", "Sh"}, {"ш", "sh"},
+                {"Ъ", ""}, {"ъ", ""},
+                {"Ы", "Y"}, {"ы", "y"},
+                {"Ь", ""}, {"ь", ""},
+                {"Э", "E"}, {"э", "e"},
+                {"Ю", "Yu"}, {"ю", "yu"},
+                {"Я", "Ya"}, {"я", "ya"}
+        };
+        String result = cyrillic;
+        for (String[] pair : map) {
+            result = result.replace(pair[0], pair[1]);
+        }
+        return result;
     }
 
     private String escapeXml(String s) {
