@@ -1,6 +1,4 @@
 import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
@@ -12,20 +10,26 @@ import java.util.List;
 
 public class ExcelToOmxConverter extends JFrame {
 
-    private JTextField filesField;          // показывает количество или имена выбранных файлов
-    private JTextField outputDirField;      // путь к папке для сохранения
+    private JTextField filesField;
+    private JTextField outputDirField;
     private JLabel statusLabel;
+
+    // Поля фильтров
+    private JTextField filterAIField;
+    private JTextField filterAOField;
+    private JTextField filterDIField;
+    private JTextField filterDOField;
 
     private List<File> selectedFiles = new ArrayList<>();
     private File outputDir = null;
 
     public ExcelToOmxConverter() {
-        setTitle("Excel → OMX (множественный выбор)");
+        setTitle("Excel → OMX (AI / AO / DI / DO)");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(750, 200);
+        setSize(820, 350);
         setLayout(new BorderLayout(10, 10));
 
-        // --- Верхняя панель: выбор файлов ---
+        // Верх: выбор файлов
         JPanel filePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton chooseFilesButton = new JButton("Выбрать Excel файлы");
         filesField = new JTextField(40);
@@ -34,16 +38,41 @@ public class ExcelToOmxConverter extends JFrame {
         filePanel.add(filesField);
         add(filePanel, BorderLayout.NORTH);
 
-        // --- Средняя панель: выбор папки ---
+        // Центральная часть: папка + фильтры
+        JPanel centerPanel = new JPanel();
+        centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
+
+        // Панель выбора папки
         JPanel dirPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton chooseDirButton = new JButton("Выбрать папку для сохранения");
         outputDirField = new JTextField(40);
         outputDirField.setEditable(false);
         dirPanel.add(chooseDirButton);
         dirPanel.add(outputDirField);
-        add(dirPanel, BorderLayout.CENTER);
+        centerPanel.add(dirPanel);
 
-        // --- Нижняя панель: кнопка генерации + статус ---
+        // Панель фильтров (4 поля)
+        JPanel filterPanel = new JPanel(new GridLayout(2, 4, 5, 5));
+        filterPanel.setBorder(BorderFactory.createTitledBorder("Генерация по соответствию (фильтры)"));
+        filterPanel.add(new JLabel("Фильтр AI:", SwingConstants.CENTER));
+        filterPanel.add(new JLabel("Фильтр AO:", SwingConstants.CENTER));
+        filterPanel.add(new JLabel("Фильтр DI:", SwingConstants.CENTER));
+        filterPanel.add(new JLabel("Фильтр DO:", SwingConstants.CENTER));
+
+        filterAIField = new JTextField();
+        filterAOField = new JTextField();
+        filterDIField = new JTextField();
+        filterDOField = new JTextField();
+
+        filterPanel.add(filterAIField);
+        filterPanel.add(filterAOField);
+        filterPanel.add(filterDIField);
+        filterPanel.add(filterDOField);
+        centerPanel.add(filterPanel);
+
+        add(centerPanel, BorderLayout.CENTER);
+
+        // Низ: кнопка генерации и статус
         JPanel bottomPanel = new JPanel(new BorderLayout());
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         JButton generateButton = new JButton("Создать XML");
@@ -53,7 +82,7 @@ public class ExcelToOmxConverter extends JFrame {
         bottomPanel.add(statusLabel, BorderLayout.SOUTH);
         add(bottomPanel, BorderLayout.SOUTH);
 
-        // --- Обработчики событий ---
+        // Обработчики
         chooseFilesButton.addActionListener(this::chooseFiles);
         chooseDirButton.addActionListener(this::chooseOutputDir);
         generateButton.addActionListener(this::generateXml);
@@ -62,19 +91,16 @@ public class ExcelToOmxConverter extends JFrame {
         setVisible(true);
     }
 
-    // Выбор нескольких Excel-файлов
     private void chooseFiles(ActionEvent e) {
         JFileChooser chooser = new JFileChooser();
         chooser.setMultiSelectionEnabled(true);
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
                 "Excel files", "xlsx", "xls"));
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            File[] files = chooser.getSelectedFiles();
             selectedFiles.clear();
-            for (File f : files) {
+            for (File f : chooser.getSelectedFiles()) {
                 selectedFiles.add(f);
             }
-            // Показываем список имён (или количество)
             if (selectedFiles.size() <= 5) {
                 StringBuilder sb = new StringBuilder();
                 for (File f : selectedFiles) {
@@ -88,7 +114,6 @@ public class ExcelToOmxConverter extends JFrame {
         }
     }
 
-    // Выбор папки назначения
     private void chooseOutputDir(ActionEvent e) {
         JFileChooser chooser = new JFileChooser();
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
@@ -100,7 +125,6 @@ public class ExcelToOmxConverter extends JFrame {
         }
     }
 
-    // Генерация XML для всех выбранных файлов
     private void generateXml(ActionEvent e) {
         if (selectedFiles.isEmpty()) {
             statusLabel.setText("Сначала выберите хотя бы один Excel-файл!");
@@ -127,83 +151,117 @@ public class ExcelToOmxConverter extends JFrame {
 
         String msg = "Готово. Успешно: " + successCount;
         if (errorCount > 0) {
-            msg += ", ошибок: " + errorCount + " (см. ниже)";
-            errors.insert(0, msg + "\n\n");
+            msg += ", ошибок: " + errorCount;
             JOptionPane.showMessageDialog(this, errors.toString(),
-                    "Результат обработки", JOptionPane.WARNING_MESSAGE);
-        } else {
-            msg += ". Файлы сохранены в " + outputDir.getAbsolutePath();
+                    "Ошибки при обработке", JOptionPane.WARNING_MESSAGE);
         }
         statusLabel.setText(msg);
     }
 
-    // Обработка одного Excel-файла и сохранение XML
-    private void processSingleExcel(File excelFile, File outputFolder) throws Exception {
-        // Извлекаем базовое имя без расширения
+    private void processSingleExcel(File excelFile, File baseOutputDir) throws Exception {
         String fileName = excelFile.getName();
-        String baseName;
-        int dotIndex = fileName.lastIndexOf('.');
-        if (dotIndex > 0) {
-            baseName = fileName.substring(0, dotIndex);
-        } else {
-            baseName = fileName;
-        }
+        int dotIdx = fileName.lastIndexOf('.');
+        String baseName = dotIdx > 0 ? fileName.substring(0, dotIdx) : fileName;
 
-        // Имя выходного файла
-        String outputFileName = baseName + "_AI_ST.omx-export";
-        File outputFile = new File(outputFolder, outputFileName);
+        String filterAI = filterAIField.getText().trim();
+        String filterAO = filterAOField.getText().trim();
+        String filterDI = filterDIField.getText().trim();
+        String filterDO = filterDOField.getText().trim();
 
-        // Строим XML
-        String header = """
-                <omx xmlns="system" migration="41" xmlns:ct="automation.control">
-                  <ct:socket-type name="ST" access-level="public" uuid="">
-                """;
-        String footer = """
-                  </ct:socket-type>
-                </omx>
-                """;
-
-        StringBuilder parametersBlock = new StringBuilder();
+        List<String> aiTags = new ArrayList<>();
+        List<String> aiDesc = new ArrayList<>();
+        List<String> aoTags = new ArrayList<>();
+        List<String> aoDesc = new ArrayList<>();
+        List<String> diTags = new ArrayList<>();
+        List<String> diDesc = new ArrayList<>();
+        List<String> doTags = new ArrayList<>();
+        List<String> doDesc = new ArrayList<>();
 
         try (Workbook workbook = WorkbookFactory.create(new FileInputStream(excelFile))) {
-            Sheet sheet = workbook.getSheetAt(0); // первый лист
+            Sheet sheet = workbook.getSheetAt(0);
             for (Row row : sheet) {
-                Cell cellA = row.getCell(0); // столбец A
-                Cell cellB = row.getCell(1); // столбец B
-
+                Cell cellA = row.getCell(0);
+                Cell cellB = row.getCell(1);
                 if (cellA == null) continue;
                 String valueA = cellA.getStringCellValue().trim();
-                if (!valueA.startsWith("AI.ST.")) continue;
+                String desc = (cellB != null) ? cellB.getStringCellValue().trim() : "";
 
-                // Извлекаем Tag (всё после "AI.ST.")
-                String tag = valueA.substring(6); // длина "AI.ST." = 6
-                if (tag.isEmpty()) continue;
-
-                // Значение из столбца B (NameTag)
-                String nameTag = "";
-                if (cellB != null) {
-                    nameTag = cellB.getStringCellValue().trim();
+                if (valueA.startsWith("AI.ST.")) {
+                    String tag = valueA.substring(6);
+                    if (!tag.isEmpty() && matchesFilter(tag, filterAI)) {
+                        aiTags.add(tag);
+                        aiDesc.add(desc);
+                    }
+                } else if (valueA.startsWith("AO.ST.")) {
+                    String tag = valueA.substring(6);
+                    if (!tag.isEmpty() && matchesFilter(tag, filterAO)) {
+                        aoTags.add(tag);
+                        aoDesc.add(desc);
+                    }
+                } else if (valueA.startsWith("DI.ST.")) {
+                    String tag = valueA.substring(6);
+                    if (!tag.isEmpty() && matchesFilter(tag, filterDI)) {
+                        diTags.add(tag);
+                        diDesc.add(desc);
+                    }
+                } else if (valueA.startsWith("DO.ST.")) {
+                    String tag = valueA.substring(6);
+                    if (!tag.isEmpty() && matchesFilter(tag, filterDO)) {
+                        doTags.add(tag);
+                        doDesc.add(desc);
+                    }
                 }
-
-                // Формируем узел параметра
-                parametersBlock.append("    <ct:socket-parameter name=\"")
-                        .append(escapeXml(tag))
-                        .append("\" type=\"float32\" uuid=\"\">\n")
-                        .append("      <attribute type=\"unit.System.Attributes.Description\" value=\"")
-                        .append(escapeXml(nameTag))
-                        .append("\" />\n")
-                        .append("    </ct:socket-parameter>\n");
             }
         }
 
-        String fullXml = header + parametersBlock.toString() + footer;
-        Files.writeString(outputFile.toPath(), fullXml);
+        generateTypeFile(baseOutputDir, baseName, "AI", aiTags, aiDesc, "float32");
+        generateTypeFile(baseOutputDir, baseName, "AO", aoTags, aoDesc, "float32");
+        generateTypeFile(baseOutputDir, baseName, "DI", diTags, diDesc, "bool");
+        generateTypeFile(baseOutputDir, baseName, "DO", doTags, doDesc, "bool");
     }
 
-    // Экранирование спецсимволов XML
-    private String escapeXml(String input) {
-        if (input == null) return "";
-        return input
+    private boolean matchesFilter(String tag, String filter) {
+        if (filter.isEmpty()) return true;
+        return tag.contains(filter);
+    }
+
+    private void generateTypeFile(File baseDir, String baseName, String type,
+                                  List<String> tags, List<String> descriptions,
+                                  String dataType) throws IOException {
+        if (tags.isEmpty()) return;
+
+        File targetDir = new File(baseDir, "imports/Server/" + baseName + "/" + type);
+        Files.createDirectories(targetDir.toPath());
+
+        String xmlContent = buildOmxXml(tags, descriptions, dataType);
+        String outputFileName = baseName + "_" + type + "_ST.omx-export";
+        File outputFile = new File(targetDir, outputFileName);
+        Files.writeString(outputFile.toPath(), xmlContent);
+    }
+
+    private String buildOmxXml(List<String> tags, List<String> descriptions, String dataType) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<omx xmlns=\"system\" migration=\"41\" xmlns:ct=\"automation.control\">\n");
+        sb.append("  <ct:socket-type name=\"ST\" access-level=\"public\" uuid=\"\">\n");
+
+        for (int i = 0; i < tags.size(); i++) {
+            sb.append("    <ct:socket-parameter name=\"")
+                    .append(escapeXml(tags.get(i)))
+                    .append("\" type=\"").append(dataType).append("\" uuid=\"\">\n");
+            sb.append("      <attribute type=\"unit.System.Attributes.Description\" value=\"")
+                    .append(escapeXml(descriptions.get(i)))
+                    .append("\" />\n");
+            sb.append("    </ct:socket-parameter>\n");
+        }
+
+        sb.append("  </ct:socket-type>\n");
+        sb.append("</omx>\n");
+        return sb.toString();
+    }
+
+    private String escapeXml(String s) {
+        if (s == null) return "";
+        return s
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
