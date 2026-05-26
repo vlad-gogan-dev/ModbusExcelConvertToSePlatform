@@ -6,7 +6,9 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class ExcelToOmxConverter extends JFrame {
 
@@ -22,12 +24,24 @@ public class ExcelToOmxConverter extends JFrame {
     private List<File> selectedFiles = new ArrayList<>();
     private File outputDir = null;
 
+    // Вспомогательный класс для хранения параметров
+    private static class Parameter {
+        final String tag;
+        final String description;
+
+        Parameter(String tag, String description) {
+            this.tag = tag;
+            this.description = description;
+        }
+    }
+
     public ExcelToOmxConverter() {
-        setTitle("Excel → OMX (AI / AO / DI / DO)");
+        setTitle("Excel → OMX (AI / AO / DI / DO) + Merged Types");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setSize(820, 350);
         setLayout(new BorderLayout(10, 10));
 
+        // Верх: выбор файлов
         JPanel filePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton chooseFilesButton = new JButton("Выбрать Excel файлы");
         filesField = new JTextField(40);
@@ -36,6 +50,7 @@ public class ExcelToOmxConverter extends JFrame {
         filePanel.add(filesField);
         add(filePanel, BorderLayout.NORTH);
 
+        // Центральная часть: папка + фильтры
         JPanel centerPanel = new JPanel();
         centerPanel.setLayout(new BoxLayout(centerPanel, BoxLayout.Y_AXIS));
 
@@ -67,6 +82,7 @@ public class ExcelToOmxConverter extends JFrame {
 
         add(centerPanel, BorderLayout.CENTER);
 
+        // Низ: кнопка генерации и статус
         JPanel bottomPanel = new JPanel(new BorderLayout());
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         JButton generateButton = new JButton("Создать XML");
@@ -142,6 +158,14 @@ public class ExcelToOmxConverter extends JFrame {
             }
         }
 
+        // Генерация объединённых Types-файлов
+        try {
+            generateMergedTypesFiles(outputDir);
+        } catch (Exception ex) {
+            errorCount++;
+            errors.append("Ошибка создания объединённых файлов: ").append(ex.getMessage()).append("\n");
+        }
+
         String msg = "Готово. Успешно: " + successCount;
         if (errorCount > 0) {
             msg += ", ошибок: " + errorCount;
@@ -151,6 +175,7 @@ public class ExcelToOmxConverter extends JFrame {
         statusLabel.setText(msg);
     }
 
+    // Обработка одного файла с генерацией его собственных файлов
     private void processSingleExcel(File excelFile, File baseOutputDir) throws Exception {
         String fileName = excelFile.getName();
         int dotIdx = fileName.lastIndexOf('.');
@@ -170,11 +195,11 @@ public class ExcelToOmxConverter extends JFrame {
         List<String> doTags = new ArrayList<>();
         List<String> doDesc = new ArrayList<>();
 
-        String sheetName = ""; // имя листа Excel
+        String sheetName = "";
 
         try (Workbook workbook = WorkbookFactory.create(new FileInputStream(excelFile))) {
             Sheet sheet = workbook.getSheetAt(0);
-            sheetName = sheet.getSheetName(); // запоминаем имя первого листа
+            sheetName = sheet.getSheetName();
             for (Row row : sheet) {
                 Cell cellA = row.getCell(0);
                 Cell cellB = row.getCell(1);
@@ -210,13 +235,13 @@ public class ExcelToOmxConverter extends JFrame {
             }
         }
 
-        // Генерация стандартных _ST файлов
+        // Стандартные _ST файлы
         generateTypeFile(baseOutputDir, baseName, "AI", aiTags, aiDesc, "float32");
         generateTypeFile(baseOutputDir, baseName, "AO", aoTags, aoDesc, "float32");
         generateTypeFile(baseOutputDir, baseName, "DI", diTags, diDesc, "bool");
         generateTypeFile(baseOutputDir, baseName, "DO", doTags, doDesc, "bool");
 
-        // Генерация новых Types-файлов
+        // Types файлы для каждого файла
         generateTypesFile(baseOutputDir, baseName, sheetName, "AI", aiTags, aiDesc, "float32");
         generateTypesFile(baseOutputDir, baseName, sheetName, "AO", aoTags, aoDesc, "float32");
         generateTypesFile(baseOutputDir, baseName, sheetName, "DI", diTags, diDesc, "bool");
@@ -240,9 +265,6 @@ public class ExcelToOmxConverter extends JFrame {
         Files.writeString(outputFile.toPath(), xmlContent);
     }
 
-    /**
-     * Генерирует Types-файл с namespace и типами PLC/Serv.
-     */
     private void generateTypesFile(File baseDir, String baseName, String sheetName, String type,
                                    List<String> tags, List<String> descriptions,
                                    String dataType) throws IOException {
@@ -251,7 +273,6 @@ public class ExcelToOmxConverter extends JFrame {
         File typesDir = new File(baseDir, "imports/Server/" + baseName + "/" + type + "/Types");
         Files.createDirectories(typesDir.toPath());
 
-        // Транслитерация имени файла для namespace
         String translitBase = transliterate(baseName);
         String translitWithUnderscore = translitBase.replace('.', '_');
         String namespaceName = type + "." + translitBase + "." + translitWithUnderscore;
@@ -260,7 +281,6 @@ public class ExcelToOmxConverter extends JFrame {
         xml.append("<omx xmlns=\"system\" migration=\"41\" xmlns:ct=\"automation.control\" xmlns:r=\"automation.reference\">\n");
         xml.append("  <namespace name=\"").append(namespaceName).append("\" uuid=\"\">\n");
 
-        // socket-type ST с параметрами
         xml.append("    <ct:socket-type name=\"ST\" access-level=\"public\" uuid=\"\">\n");
         for (int i = 0; i < tags.size(); i++) {
             xml.append("      <ct:socket-parameter name=\"").append(escapeXml(tags.get(i)))
@@ -274,14 +294,12 @@ public class ExcelToOmxConverter extends JFrame {
         String plcTypeName = type + "_PLC";
         String servTypeName = type + "_Serv";
 
-        // Тип PLC
         xml.append("    <ct:type name=\"").append(plcTypeName)
                 .append("\" abstract=\"false\" aspect=\"Aspects.PLC\" access-level=\"public\" uuid=\"\">\n");
         xml.append("      <ct:socket name=\"ST\" access-level=\"public\" access-scope=\"global\" direction=\"out\" type=\"")
                 .append(translitWithUnderscore).append(".ST\" uuid=\"\" />\n");
         xml.append("    </ct:type>\n");
 
-        // Тип Serv
         xml.append("    <ct:type name=\"").append(servTypeName)
                 .append("\" abstract=\"false\" aspect=\"Aspects.IOS\" original=\"")
                 .append(plcTypeName).append("\" access-level=\"public\" uuid=\"\">\n");
@@ -297,6 +315,120 @@ public class ExcelToOmxConverter extends JFrame {
 
         String outputFileName = sheetName + ".omx-export";
         File outputFile = new File(typesDir, outputFileName);
+        Files.writeString(outputFile.toPath(), xml.toString());
+    }
+
+    // Генерация объединённых файлов Types_<Type>.omx-export
+    private void generateMergedTypesFiles(File baseOutputDir) throws IOException {
+        String filterAI = filterAIField.getText().trim();
+        String filterAO = filterAOField.getText().trim();
+        String filterDI = filterDIField.getText().trim();
+        String filterDO = filterDOField.getText().trim();
+
+        generateMergedTypeFile("AI", filterAI, "float32", baseOutputDir);
+        generateMergedTypeFile("AO", filterAO, "float32", baseOutputDir);
+        generateMergedTypeFile("DI", filterDI, "bool", baseOutputDir);
+        generateMergedTypeFile("DO", filterDO, "bool", baseOutputDir);
+    }
+
+    private void generateMergedTypeFile(String type, String filter, String dataType, File baseOutputDir) throws IOException {
+        // Структура: верхний_неймспейс -> полный_неймспейс -> список параметров
+        Map<String, Map<String, List<Parameter>>> hierarchy = new LinkedHashMap<>();
+
+        for (File excelFile : selectedFiles) {
+            String baseName = getBaseName(excelFile.getName());
+            String translitFull = transliterate(baseName).replace('.', '_');
+            String upperNS;
+            int underscoreIdx = translitFull.indexOf('_');
+            if (underscoreIdx > 0) {
+                upperNS = translitFull.substring(0, underscoreIdx);
+            } else {
+                upperNS = translitFull; // на случай отсутствия точки
+            }
+
+            List<Parameter> params = new ArrayList<>();
+            try (Workbook workbook = WorkbookFactory.create(new FileInputStream(excelFile))) {
+                Sheet sheet = workbook.getSheetAt(0);
+                for (Row row : sheet) {
+                    Cell cellA = row.getCell(0);
+                    Cell cellB = row.getCell(1);
+                    if (cellA == null) continue;
+                    String valueA = cellA.getStringCellValue().trim();
+                    if (!valueA.startsWith(type + ".ST.")) continue;
+                    String tag = valueA.substring((type + ".ST.").length());
+                    if (tag.isEmpty()) continue;
+                    if (!matchesFilter(tag, filter)) continue;
+                    String desc = (cellB != null) ? cellB.getStringCellValue().trim() : "";
+                    params.add(new Parameter(tag, desc));
+                }
+            } catch (Exception e) {
+                // пропускаем файл при ошибке чтения
+                continue;
+            }
+
+            if (!params.isEmpty()) {
+                hierarchy.computeIfAbsent(upperNS, k -> new LinkedHashMap<>())
+                        .put(translitFull, params);
+            }
+        }
+
+        if (hierarchy.isEmpty()) return;
+
+        StringBuilder xml = new StringBuilder();
+        xml.append("<omx xmlns=\"system\" migration=\"41\" xmlns:ct=\"automation.control\" xmlns:r=\"automation.reference\">\n");
+        xml.append("  <namespace name=\"").append(type).append("\" uuid=\"\">\n");
+
+        for (Map.Entry<String, Map<String, List<Parameter>>> upperEntry : hierarchy.entrySet()) {
+            String upperNS = upperEntry.getKey();
+            xml.append("    <namespace name=\"").append(upperNS).append("\" uuid=\"\">\n");
+            for (Map.Entry<String, List<Parameter>> nsEntry : upperEntry.getValue().entrySet()) {
+                String fullNS = nsEntry.getKey();
+                List<Parameter> parameters = nsEntry.getValue();
+
+                xml.append("      <namespace name=\"").append(fullNS).append("\" uuid=\"\">\n");
+
+                // socket-type ST
+                xml.append("        <ct:socket-type name=\"ST\" access-level=\"public\" uuid=\"\">\n");
+                for (Parameter p : parameters) {
+                    xml.append("          <ct:socket-parameter name=\"").append(escapeXml(p.tag))
+                            .append("\" type=\"").append(dataType).append("\" uuid=\"\">\n");
+                    xml.append("            <attribute type=\"unit.System.Attributes.Description\" value=\"")
+                            .append(escapeXml(p.description)).append("\" />\n");
+                    xml.append("          </ct:socket-parameter>\n");
+                }
+                xml.append("        </ct:socket-type>\n");
+
+                String plcTypeName = type + "_PLC";
+                String servTypeName = type + "_Serv";
+
+                // Тип PLC
+                xml.append("        <ct:type name=\"").append(plcTypeName)
+                        .append("\" abstract=\"false\" aspect=\"Aspects.PLC\" access-level=\"public\" uuid=\"\">\n");
+                xml.append("          <ct:socket name=\"ST\" access-level=\"public\" access-scope=\"global\" direction=\"out\" type=\"")
+                        .append(fullNS).append(".ST\" uuid=\"\" />\n");
+                xml.append("        </ct:type>\n");
+
+                // Тип Serv
+                xml.append("        <ct:type name=\"").append(servTypeName)
+                        .append("\" abstract=\"false\" aspect=\"Aspects.IOS\" original=\"").append(plcTypeName)
+                        .append("\" access-level=\"public\" uuid=\"\">\n");
+                xml.append("          <ct:socket-bind source=\"_").append(plcTypeName).append(".ST\" target=\"ST\" />\n");
+                xml.append("          <r:ref name=\"_").append(plcTypeName).append("\" type=\"").append(plcTypeName)
+                        .append("\" const-access=\"false\" aspected=\"true\" uuid=\"\" />\n");
+                xml.append("          <ct:socket name=\"ST\" access-level=\"public\" access-scope=\"global\" direction=\"out\" type=\"")
+                        .append(fullNS).append(".ST\" uuid=\"\" />\n");
+                xml.append("        </ct:type>\n");
+
+                xml.append("      </namespace>\n");
+            }
+            xml.append("    </namespace>\n");
+        }
+        xml.append("  </namespace>\n");
+        xml.append("</omx>\n");
+
+        File serverDir = new File(baseOutputDir, "imports/Server");
+        Files.createDirectories(serverDir.toPath());
+        File outputFile = new File(serverDir, "Types_" + type + ".omx-export");
         Files.writeString(outputFile.toPath(), xml.toString());
     }
 
@@ -316,9 +448,6 @@ public class ExcelToOmxConverter extends JFrame {
         return sb.toString();
     }
 
-    /**
-     * Простая транслитерация русских букв для формирования валидных имён namespace.
-     */
     private String transliterate(String cyrillic) {
         String[][] map = {
                 {"Щ", "SH"}, {"щ", "sh"},
@@ -370,6 +499,11 @@ public class ExcelToOmxConverter extends JFrame {
                 .replace(">", "&gt;")
                 .replace("\"", "&quot;")
                 .replace("'", "&apos;");
+    }
+
+    private String getBaseName(String fileName) {
+        int dotIdx = fileName.lastIndexOf('.');
+        return dotIdx > 0 ? fileName.substring(0, dotIdx) : fileName;
     }
 
     public static void main(String[] args) {
